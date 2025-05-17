@@ -4,10 +4,10 @@ This project provides tools to scrape papers from arXiv in the math, physics, an
 
 ## Overview
 
-The main script (`arxiv_scraper.py`) scrapes papers from arXiv published from January 2024 to the present day. It:
+The scraper efficiently downloads and processes papers from arXiv using parallel processing and optimized settings. It:
 
-1. Downloads papers from the math, physics, and CS categories
-2. Extracts LaTeX source code from the downloaded archives
+1. Downloads papers from specified arXiv categories using parallel processing
+2. Extracts LaTeX source code from the downloaded archives using streaming extraction
 3. Creates a dataset in the following format:
    ```json
    {
@@ -22,16 +22,27 @@ The main script (`arxiv_scraper.py`) scrapes papers from arXiv published from Ja
      "pdf_url": "https://arxiv.org/pdf/1234.56789.pdf"
    }
    ```
-4. Periodically saves the dataset to disk to prevent data loss
+4. Periodically saves the dataset to disk with automatic backups
+5. Supports graceful shutdown with Ctrl+C to save progress
+6. Provides comprehensive analysis tools for the collected dataset
 
-Additionally, the `dataset_analyzer.py` script provides visualization and analysis of the collected dataset.
+## Features
+
+- **Parallel Processing**: Process multiple papers simultaneously for faster scraping
+- **Streaming Extraction**: Efficient LaTeX extraction without writing to disk
+- **Smart Caching**: Cached category detection for better performance
+- **Graceful Shutdown**: Safe interruption with progress saving
+- **Automatic Backups**: Regular dataset backups with timestamps
+- **Comprehensive Analysis**: Detailed statistics and visualizations
+- **Rate Limiting**: Respects arXiv's rate limits while maximizing throughput
+- **Error Handling**: Robust error recovery and logging
 
 ## Requirements
 
 Install the required packages:
 
 ```bash
-pip install arxiv pandas tqdm matplotlib seaborn wordcloud
+pip install arxiv pandas tqdm matplotlib seaborn wordcloud structlog
 ```
 
 ## Usage
@@ -39,21 +50,33 @@ pip install arxiv pandas tqdm matplotlib seaborn wordcloud
 ### Running the Scraper
 
 ```bash
-python arxiv_scraper.py
+# Basic usage
+arxivscraper scrape
+
+# Advanced usage with custom settings
+arxivscraper scrape \
+    --output-dir "arxiv_dataset" \
+    --temp-dir "/tmp/arxivdownloads" \
+    --max-papers 5000 \
+    --save-interval 100 \
+    --start-date "2024-01-01" \
+    --categories math cs physics \
+    --max-workers 16
 ```
 
 This will:
 - Create directories for dataset storage and temporary downloads
-- Scrape papers from math, physics, and CS categories
+- Scrape papers from specified categories using parallel processing
 - Process and save the dataset to `arxiv_dataset/arxiv_dataset.json`
 - Generate statistics about the dataset
+- Create automatic backups during processing
 
 ### Analyzing the Dataset
 
 After collecting data, analyze and visualize it with:
 
 ```bash
-python dataset_analyzer.py arxiv_dataset/arxiv_dataset.json
+arxivscraper analyze arxiv_dataset/arxiv_dataset.json
 ```
 
 This will generate visualizations including:
@@ -65,71 +88,71 @@ This will generate visualizations including:
 
 Output visualizations and reports will be saved in the `arxiv_dataset/analysis` directory.
 
-## Customization
+## Configuration
 
-You can modify the following parameters in `arxiv_scraper.py`:
+You can customize the scraper's behavior using these parameters:
 
 - `output_dir`: Directory to save the dataset
 - `temp_dir`: Directory for temporary downloads
 - `max_papers_per_category`: Maximum number of papers to scrape per category
 - `save_interval`: How often to save the dataset (number of papers)
 - `start_date`: The start date for scraping papers (format: YYYY-MM-DD)
+- `max_workers`: Number of parallel workers for processing papers
 
 ## How It Works
 
 1. **Querying arXiv**: Uses the arxiv.py library to query the arXiv API for papers in specified categories.
-2. **Downloading Papers**: Downloads the paper source files (.tar.gz) from arXiv.
-3. **Extracting LaTeX**: Extracts and processes the LaTeX source from the downloaded archives.
-4. **Categorization**: Analyzes the LaTeX content to determine its category (theorem, algorithm, experiment, etc.).
-5. **Dataset Creation**: Builds a structured dataset with all the extracted information.
-6. **Periodic Saving**: Saves the dataset at regular intervals to prevent data loss.
-
-## Notes
-
-- The script is designed to be respectful of arXiv's servers by including delays between requests and using a conservative page size.
-- The LaTeX categorization is based on heuristics and may not be 100% accurate.
-- Processing large numbers of papers may take significant time and disk space.
-- The script handles errors gracefully and continues processing even if individual papers fail.
+2. **Parallel Processing**: Processes multiple papers simultaneously using a thread pool.
+3. **Streaming Extraction**: Extracts LaTeX source directly from the tar.gz files without writing to disk.
+4. **Smart Categorization**: Uses cached pattern matching to determine paper categories.
+5. **Progress Saving**: Regularly saves progress and creates backups.
+6. **Graceful Shutdown**: Handles interruptions by saving progress and cleaning up resources.
 
 ## Error Handling
 
-The script includes comprehensive error handling:
+The scraper includes comprehensive error handling:
 
-- Network errors: Retries on connection issues
-- Parsing errors: Skips problematic papers
+- Network errors: Retries on connection issues with exponential backoff
+- Parsing errors: Skips problematic papers and continues processing
 - File system errors: Creates necessary directories and handles permissions
 - Unexpected failures: Logs errors and saves progress
+- Interruptions: Graceful shutdown with progress saving
 
-All errors are logged to `arxiv_scraper.log` for debugging.
+All errors are logged to `arxivscraper.log` for debugging.
 
 ## Advanced Usage
 
 ### Resuming a Previous Run
 
-If the script is stopped, it will automatically resume from where it left off by loading the existing dataset and skipping already processed papers.
+If the script is stopped, it will automatically resume from where it left off by:
+- Loading the existing dataset
+- Skipping already processed papers
+- Continuing from the last saved state
 
 ### Focusing on Specific Categories
 
-To scrape papers from specific arXiv categories, modify the `categories` list in the `main()` function:
+To scrape papers from specific arXiv categories:
 
-```python
-# Original
-categories = ['math', 'physics', 'cs']
-
-# Modified for specific subcategories
-categories = ['cs.AI', 'cs.ML', 'math.CO']
+```bash
+arxivscraper scrape --categories math.AG cs.AI physics.acc-ph
 ```
 
-### Custom Date Ranges
+### Customizing Parallel Processing
 
-Adjust the `start_date` parameter to change the time range:
+Adjust the number of parallel workers based on your system:
 
-```python
-scraper = ArxivScraper(
-    # ...
-    start_date="2023-01-01"  # Changed from 2024-01-01
-)
+```bash
+arxivscraper scrape --max-workers 32  # For high-performance systems
+arxivscraper scrape --max-workers 4   # For resource-constrained systems
 ```
+
+## Notes
+
+- The scraper is designed to be respectful of arXiv's servers while maximizing throughput
+- LaTeX categorization is based on heuristics and may not be 100% accurate
+- Processing large numbers of papers may take significant time and disk space
+- The scraper can be safely interrupted at any time with Ctrl+C
+- All progress is automatically saved and can be resumed later
 
 ## License
 
