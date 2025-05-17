@@ -7,7 +7,7 @@ import os
 import json
 import tarfile
 import time
-import logging
+import structlog
 import datetime
 import pandas as pd
 from pathlib import Path
@@ -17,7 +17,7 @@ import tempfile
 import traceback
 from typing import List, Dict, Any, Optional, Tuple, Set
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ArxivScraper:
@@ -39,6 +39,7 @@ class ArxivScraper:
         """
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "tmp"), exist_ok=True)
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
         self.max_papers_per_category = max_papers_per_category
@@ -166,6 +167,7 @@ class ArxivScraper:
         Returns:
             Dictionary with paper data or None if processing fails
         """
+        source_path = None
         try:
             if paper.title in self.processed_ids:
                 logger.debug(f"Skipping already processed paper: {paper.title}")
@@ -175,7 +177,7 @@ class ArxivScraper:
             
             # Download source files
             source_path = self.temp_dir / f"{paper.get_short_id()}.tar.gz"
-            paper.download_source(source_path)
+            paper.download_source(dirpath=source_path.parent, filename=source_path.name)
             
             # Extract LaTeX content
             latex_content = self.extract_latex_from_source(source_path)
@@ -210,7 +212,7 @@ class ArxivScraper:
             return None
         finally:
             # Clean up downloaded file
-            if source_path.exists():
+            if source_path and source_path.exists():
                 source_path.unlink()
     
     def save_dataset(self, final: bool = False) -> None:
@@ -227,7 +229,7 @@ class ArxivScraper:
         # Create a backup with timestamp if not the final save
         if not final:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = self.output_dir / f"arxiv_dataset_backup_{timestamp}.json"
+            backup_file = self.output_dir / "tmp" / f"arxiv_dataset_backup_{timestamp}.json"
             shutil.copy(self.dataset_file, backup_file)
         
         logger.info(f"Dataset saved with {len(self.dataset)} papers.")
