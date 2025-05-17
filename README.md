@@ -39,11 +39,9 @@ The scraper efficiently downloads and processes papers from arXiv using parallel
 
 ## Requirements
 
-Install the required packages:
+See `INSTALL.md`, but tl;dr `pip install -e .`
 
-```bash
-pip install arxiv pandas tqdm matplotlib seaborn wordcloud structlog
-```
+A `uv.lock` is also provided for `uv` users.
 
 ## Usage
 
