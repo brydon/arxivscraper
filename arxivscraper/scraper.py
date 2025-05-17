@@ -107,7 +107,7 @@ class ArxivScraper:
             self.save_dataset()
             
             logger.info("Shutting down thread pool...")
-            self.executor.shutdown(wait=True)
+            self.executor.shutdown(wait=True, cancel_futures=True)
             
             logger.info("Cleanup complete. Exiting...")
         except Exception as e:
