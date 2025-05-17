@@ -16,6 +16,9 @@ import shutil
 import tempfile
 import traceback
 from typing import List, Dict, Any, Optional, Tuple, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
+from functools import lru_cache
 
 logger = structlog.get_logger(__name__)
 
@@ -26,7 +29,9 @@ class ArxivScraper:
                 temp_dir: str = "temp_downloads",
                 max_papers_per_category: int = 5000,
                 save_interval: int = 100,
-                start_date: str = "2024-01-01") -> None:
+                start_date: str = "2024-01-01",
+                max_workers: int = 16,
+    ) -> None:
         """
         Initialize the ArxivScraper.
         
@@ -36,6 +41,7 @@ class ArxivScraper:
             max_papers_per_category: Maximum number of papers to scrape per category
             save_interval: How often to save the dataset (number of papers)
             start_date: The start date for scraping papers (format: YYYY-MM-DD)
+            max_workers: Maximum number of parallel workers for processing papers
         """
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
@@ -45,6 +51,7 @@ class ArxivScraper:
         self.max_papers_per_category = max_papers_per_category
         self.save_interval = save_interval
         self.start_date = start_date
+        self.max_workers = max_workers
         
         # Create output and temp directories if they don't exist
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -63,12 +70,15 @@ class ArxivScraper:
         # Track processed papers to avoid duplicates
         self.processed_ids = {paper['title'] for paper in self.dataset}
         
-        # Configure arXiv client with conservative settings to avoid rate limiting
+        # Configure arXiv client with optimized settings
         self.client = arxiv.Client(
-            page_size=100,
-            delay_seconds=3.0,
-            num_retries=5
+            page_size=200,
+            delay_seconds=1.0,
+            num_retries=5,
         )
+        
+        # Initialize thread pool
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
     
     def build_query(self, categories: List[str]) -> str:
         """
@@ -86,51 +96,11 @@ class ArxivScraper:
         date_query = f"submittedDate:[{self.start_date}T00:00:00Z TO now]"
         return f"({category_query}) AND {date_query}"
     
-    def extract_latex_from_source(self, source_path: Path) -> Optional[str]:
-        """
-        Extract LaTeX content from a .tar.gz source file.
-        
-        Args:
-            source_path: Path to the .tar.gz source file
-            
-        Returns:
-            LaTeX content as a string or None if extraction fails
-        """
-        try:
-            # Create a temporary directory for extraction
-            with tempfile.TemporaryDirectory() as temp_extract_dir:
-                # Extract the tar.gz file
-                with tarfile.open(source_path, 'r:gz') as tar:
-                    tar.extractall(path=temp_extract_dir)
-                
-                # Find main .tex file (usually the one with \begin{document})
-                main_tex = None
-                for tex_file in Path(temp_extract_dir).glob('**/*.tex'):
-                    with open(tex_file, 'r', errors='ignore') as f:
-                        content = f.read()
-                        if r'\begin{document}' in content:
-                            main_tex = tex_file
-                            break
-                
-                if main_tex is None:
-                    # Try to find any .tex file if main wasn't found
-                    tex_files = list(Path(temp_extract_dir).glob('**/*.tex'))
-                    if tex_files:
-                        main_tex = tex_files[0]
-                
-                if main_tex:
-                    with open(main_tex, 'r', errors='ignore') as f:
-                        return f.read()
-                else:
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"Error extracting LaTeX: {str(e)}")
-            return None
-    
+    @lru_cache(maxsize=1000)
     def determine_latex_category(self, latex_content: str) -> str:
         """
         Attempt to determine the main LaTeX category from its content.
+        Cached for better performance.
         
         Args:
             latex_content: LaTeX content as a string
@@ -147,15 +117,66 @@ class ArxivScraper:
             'proof': [r'\\begin{proof}', r'\\end{proof}', r'we prove', r'proof of']
         }
         
+        # Single pass through content for all patterns
+        content_lower = latex_content.lower()
         counts = {cat: 0 for cat in categories}
         
         for cat, patterns in categories.items():
             for pattern in patterns:
-                counts[cat] += len(re.findall(pattern, latex_content, re.IGNORECASE))
+                counts[cat] += len(re.findall(pattern, content_lower))
         
         # Return category with highest count, or 'other' if all zero
         max_cat = max(counts.items(), key=lambda x: x[1])
         return max_cat[0] if max_cat[1] > 0 else 'other'
+    
+    def extract_latex_from_source(self, source_path: Path) -> Optional[str]:
+        """
+        Extract LaTeX content from a .tar.gz source file using streaming.
+        
+        Args:
+            source_path: Path to the .tar.gz source file
+            
+        Returns:
+            LaTeX content as a string or None if extraction fails
+        """
+        try:
+            with tarfile.open(source_path, 'r:gz') as tar:
+                # First try to find main.tex or similar
+                main_tex = None
+                for member in tar.getmembers():
+                    if member.name.endswith('.tex'):
+                        if 'main.tex' in member.name.lower():
+                            main_tex = member
+                            break
+                
+                # If no main.tex found, look for any .tex file with \begin{document}
+                if main_tex is None:
+                    for member in tar.getmembers():
+                        if member.name.endswith('.tex'):
+                            f = tar.extractfile(member)
+                            if f:
+                                content = f.read().decode('utf-8', errors='ignore')
+                                if r'\begin{document}' in content:
+                                    main_tex = member
+                                    break
+                
+                # If still no main file found, take the first .tex file
+                if main_tex is None:
+                    for member in tar.getmembers():
+                        if member.name.endswith('.tex'):
+                            main_tex = member
+                            break
+                
+                if main_tex:
+                    f = tar.extractfile(main_tex)
+                    if f:
+                        return f.read().decode('utf-8', errors='ignore')
+            
+            return None
+                    
+        except Exception as e:
+            logger.error(f"Error extracting LaTeX: {str(e)}")
+            return None
     
     def process_paper(self, paper: arxiv.Result) -> Optional[Dict[str, Any]]:
         """
@@ -236,7 +257,7 @@ class ArxivScraper:
     
     def scrape_categories(self, categories: List[str]) -> None:
         """
-        Scrape papers from the specified arXiv categories.
+        Scrape papers from the specified arXiv categories using parallel processing.
         
         Args:
             categories: List of arXiv categories to scrape (e.g., ['math', 'cs', 'physics'])
@@ -256,25 +277,27 @@ class ArxivScraper:
         
         # Get the results
         papers_processed = 0
+        futures = []
         
         try:
             from tqdm import tqdm
-            for paper in tqdm(self.client.results(search), total=self.max_papers_per_category, 
-                            desc=f"Scraping {', '.join(categories)}"):
-                
-                paper_data = self.process_paper(paper)
-                
+            # Submit papers for parallel processing
+            for paper in self.client.results(search):
+                if paper.title not in self.processed_ids:
+                    futures.append(self.executor.submit(self.process_paper, paper))
+            
+            # Process results as they complete
+            for future in tqdm(as_completed(futures), total=len(futures), 
+                             desc=f"Processing papers from {', '.join(categories)}"):
+                paper_data = future.result()
                 if paper_data:
                     self.dataset.append(paper_data)
                     papers_processed += 1
-                
-                # Save periodically
-                if papers_processed > 0 and papers_processed % self.save_interval == 0:
-                    logger.info(f"Processed {papers_processed} papers. Saving checkpoint...")
-                    self.save_dataset()
-                
-                # Add a small delay to be nice to arXiv servers
-                time.sleep(1)
+                    
+                    # Save periodically
+                    if papers_processed > 0 and papers_processed % self.save_interval == 0:
+                        logger.info(f"Processed {papers_processed} papers. Saving checkpoint...")
+                        self.save_dataset()
                 
         except Exception as e:
             logger.error(f"Error during scraping: {str(e)}")
@@ -323,3 +346,7 @@ class ArxivScraper:
         print(f"\nAverage authors per paper: {stats['average_authors_per_paper']:.2f}")
         print(f"Total unique authors: {stats['total_unique_authors']}")
         print("=============================\n")
+    
+    def __del__(self):
+        """Clean up resources when the scraper is destroyed."""
+        self.executor.shutdown(wait=True)
