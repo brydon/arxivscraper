@@ -60,7 +60,7 @@ class ArxivScraper:
         self.temp_dir.mkdir(exist_ok=True, parents=True)
         
         # Initialize dataset
-        self.dataset = []
+        self.dataset: list[dict] = []
         self.dataset_file = self.output_dir / "arxiv_dataset.json"
         
         # Load existing dataset if it exists
@@ -214,7 +214,7 @@ class ArxivScraper:
             logger.error(f"Error extracting LaTeX: {str(e)}")
             return None
     
-    def process_paper(self, paper: arxiv.Result) -> Optional[Dict[str, Any]]:
+    def process_paper(self, paper: arxiv.Result):
         """
         Process a single paper from arXiv.
         
@@ -228,9 +228,9 @@ class ArxivScraper:
         try:
             if paper.title in self.processed_ids:
                 logger.debug(f"Skipping already processed paper: {paper.title}")
-                return None
+                return
             
-            logger.info(f"Processing paper: {paper.title}")
+            logger.info(f"Processing paper: {paper.title}", n_data=len(self))
             
             # Download source files
             source_path = self.temp_dir / f"{paper.get_short_id()}.tar.gz"
@@ -240,7 +240,7 @@ class ArxivScraper:
             latex_content = self.extract_latex_from_source(source_path)
             if not latex_content:
                 logger.warning(f"Could not extract LaTeX content from {paper.title}")
-                return None
+                return
             
             # Determine LaTeX category
             latex_category = self.determine_latex_category(latex_content)
@@ -258,10 +258,9 @@ class ArxivScraper:
                 "pdf_url": paper.pdf_url
             }
             
-            # Add to processed IDs
+            self.dataset.append(paper_data)
             self.processed_ids.add(paper.title)
-            
-            return paper_data
+            logger.info(f"Succesfully processed paper {paper.title}", n_data=len(self.dataset), n_processed=len(self.processed_ids))
             
         except Exception as e:
             logger.error(f"Error processing paper {paper.title}: {str(e)}")
@@ -289,7 +288,7 @@ class ArxivScraper:
             backup_file = self.output_dir / "tmp" / f"arxiv_dataset_backup_{timestamp}.json"
             shutil.copy(self.dataset_file, backup_file)
         
-        logger.info(f"Dataset saved with {len(self.dataset)} papers.")
+        logger.info(f"Dataset saved with {len(self.dataset)} papers to {self.dataset_file}")
     
     def scrape_categories(self, categories: List[str]) -> None:
         """
@@ -312,7 +311,6 @@ class ArxivScraper:
         )
         
         # Get the results
-        papers_processed = 0
         futures = []
         
         try:
@@ -334,15 +332,12 @@ class ArxivScraper:
                     break
                     
                 try:
-                    paper_data = future.result()
-                    if paper_data:
-                        self.dataset.append(paper_data)
-                        papers_processed += 1
-                        
-                        # Save periodically
-                        if papers_processed > 0 and papers_processed % self.save_interval == 0:
-                            logger.info(f"Processed {papers_processed} papers. Saving checkpoint...")
-                            self.save_dataset()
+                    future.result()
+
+                    # Save periodically
+                    if len(self) > 0 and len(self) % self.save_interval == 0:
+                        logger.info(f"Processed {len(self)} papers. Saving checkpoint...")
+                        self.save_dataset()
                 except Exception as e:
                     logger.error(f"Error processing paper result: {str(e)}")
                     logger.error(traceback.format_exc())
@@ -353,11 +348,7 @@ class ArxivScraper:
         except Exception as e:
             logger.error(f"Error during scraping: {str(e)}")
             logger.error(traceback.format_exc())
-        finally:
-            # Save what we have so far
-            if papers_processed > 0:
-                self.save_dataset()
-            
+        finally:            
             # If we're shutting down, perform cleanup
             if self._shutting_down:
                 self.graceful_shutdown()
@@ -403,3 +394,6 @@ class ArxivScraper:
     def __del__(self):
         """Clean up resources when the scraper is destroyed."""
         self.graceful_shutdown()
+
+    def __len__(self) -> int:
+        return len(self.dataset)
