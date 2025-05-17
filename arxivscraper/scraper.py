@@ -175,7 +175,7 @@ class ArxivScraper:
             
             # Download source files
             source_path = self.temp_dir / f"{paper.get_short_id()}.tar.gz"
-            paper.download_source(source_path)
+            paper.download_source(dirpath=source_path.parent, filename=source_path.name)
             
             # Extract LaTeX content
             latex_content = self.extract_latex_from_source(source_path)
