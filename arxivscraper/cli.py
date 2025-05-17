@@ -25,7 +25,7 @@ def main():
     scraper_parser.add_argument(
         "--temp-dir", 
         type=str, 
-        default="temp_downloads",
+        default="/tmp/arxivdownloads/",
         help="Directory for temporary downloads"
     )
     scraper_parser.add_argument(

@@ -37,6 +37,8 @@ class ArxivScraper:
             save_interval: How often to save the dataset (number of papers)
             start_date: The start date for scraping papers (format: YYYY-MM-DD)
         """
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
         self.max_papers_per_category = max_papers_per_category
