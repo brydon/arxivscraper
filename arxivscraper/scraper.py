@@ -32,7 +32,7 @@ class ArxivScraper:
                 max_papers_per_category: int = 5000,
                 save_interval: int = 100,
                 start_date: str = "2024-01-01",
-                max_workers: int = 16,
+                max_workers: int = 1,
     ) -> None:
         """
         Initialize the ArxivScraper.
@@ -75,8 +75,6 @@ class ArxivScraper:
         # Configure arXiv client with optimized settings
         self.client = arxiv.Client(
             page_size=200,
-            delay_seconds=1.0,
-            num_retries=5,
         )
         
         # Initialize thread pool
