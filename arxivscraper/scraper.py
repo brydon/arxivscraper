@@ -19,6 +19,8 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 from functools import lru_cache
+import signal
+import threading
 
 logger = structlog.get_logger(__name__)
 
@@ -79,6 +81,42 @@ class ArxivScraper:
         
         # Initialize thread pool
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        
+        # Set up signal handlers for graceful shutdown
+        self._setup_signal_handlers()
+        
+        # Flag to track if we're shutting down
+        self._shutting_down = False
+    
+    def _setup_signal_handlers(self) -> None:
+        """Set up signal handlers for graceful shutdown."""
+        def signal_handler(signum, frame):
+            if not self._shutting_down:
+                logger.info("Received interrupt signal. Starting graceful shutdown...")
+                self._shutting_down = True
+                self.graceful_shutdown()
+        
+        # Register handlers for SIGINT (Ctrl+C) and SIGTERM
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    
+    def graceful_shutdown(self) -> None:
+        """Perform graceful shutdown of the scraper."""
+        try:
+            logger.info("Saving current progress...")
+            self.save_dataset()
+            
+            logger.info("Shutting down thread pool...")
+            self.executor.shutdown(wait=True)
+            
+            logger.info("Cleanup complete. Exiting...")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {str(e)}")
+            logger.error(traceback.format_exc())
+        finally:
+            # Force exit if we're in a thread
+            if threading.current_thread() is not threading.main_thread():
+                os._exit(1)
     
     def build_query(self, categories: List[str]) -> str:
         """
@@ -283,31 +321,48 @@ class ArxivScraper:
             from tqdm import tqdm
             # Submit papers for parallel processing
             for paper in self.client.results(search):
+                if self._shutting_down:
+                    logger.info("Shutdown requested. Stopping paper submission...")
+                    break
+                    
                 if paper.title not in self.processed_ids:
                     futures.append(self.executor.submit(self.process_paper, paper))
             
             # Process results as they complete
             for future in tqdm(as_completed(futures), total=len(futures), 
                              desc=f"Processing papers from {', '.join(categories)}"):
-                paper_data = future.result()
-                if paper_data:
-                    self.dataset.append(paper_data)
-                    papers_processed += 1
+                if self._shutting_down:
+                    logger.info("Shutdown requested. Stopping result processing...")
+                    break
                     
-                    # Save periodically
-                    if papers_processed > 0 and papers_processed % self.save_interval == 0:
-                        logger.info(f"Processed {papers_processed} papers. Saving checkpoint...")
-                        self.save_dataset()
+                try:
+                    paper_data = future.result()
+                    if paper_data:
+                        self.dataset.append(paper_data)
+                        papers_processed += 1
+                        
+                        # Save periodically
+                        if papers_processed > 0 and papers_processed % self.save_interval == 0:
+                            logger.info(f"Processed {papers_processed} papers. Saving checkpoint...")
+                            self.save_dataset()
+                except Exception as e:
+                    logger.error(f"Error processing paper result: {str(e)}")
+                    logger.error(traceback.format_exc())
                 
+        except KeyboardInterrupt:
+            logger.info("Received keyboard interrupt. Starting graceful shutdown...")
+            self._shutting_down = True
         except Exception as e:
             logger.error(f"Error during scraping: {str(e)}")
             logger.error(traceback.format_exc())
+        finally:
             # Save what we have so far
-            self.save_dataset()
-        
-        # Final save for this category
-        if papers_processed > 0:
-            self.save_dataset()
+            if papers_processed > 0:
+                self.save_dataset()
+            
+            # If we're shutting down, perform cleanup
+            if self._shutting_down:
+                self.graceful_shutdown()
     
     def create_stats(self) -> None:
         """
@@ -349,4 +404,4 @@ class ArxivScraper:
     
     def __del__(self):
         """Clean up resources when the scraper is destroyed."""
-        self.executor.shutdown(wait=True)
+        self.graceful_shutdown()
