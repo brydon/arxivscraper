@@ -39,6 +39,7 @@ class ArxivScraper:
         """
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
+        os.makedirs(os.join(temp_dir, "tmp"), exist_ok=True)
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
         self.max_papers_per_category = max_papers_per_category
@@ -227,7 +228,7 @@ class ArxivScraper:
         # Create a backup with timestamp if not the final save
         if not final:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = self.output_dir / f"arxiv_dataset_backup_{timestamp}.json"
+            backup_file = self.output_dir / "tmp" / f"arxiv_dataset_backup_{timestamp}.json"
             shutil.copy(self.dataset_file, backup_file)
         
         logger.info(f"Dataset saved with {len(self.dataset)} papers.")
